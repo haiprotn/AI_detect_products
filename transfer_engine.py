@@ -55,17 +55,19 @@ class TransferEngine:
 
     async def upload_file(self, session: aiohttp.ClientSession,
                           fpath: str, product_id: str,
-                          category: str) -> bool:
-        """Upload 1 file, retry ngoài semaphore để không chiếm slot khi ngủ"""
+                          category: str, index: int = 0, total: int = 0) -> bool:
+        """Upload 1 file, in tiến trình, retry ngoài semaphore"""
+        fname = os.path.basename(fpath)
         for attempt in range(self.MAX_RETRIES):
             try:
-                async with self._get_semaphore():  # chỉ chiếm slot khi đang gửi
+                async with self._get_semaphore():
                     async with aiofiles.open(fpath, 'rb') as f:
                         data = await f.read()
 
+                    size_kb = len(data) / 1024
                     form = aiohttp.FormData()
                     form.add_field('file', data,
-                                   filename=os.path.basename(fpath),
+                                   filename=fname,
                                    content_type='image/jpeg')
                     form.add_field('product_id', product_id)
                     form.add_field('category', category)
@@ -76,16 +78,16 @@ class TransferEngine:
                         timeout=aiohttp.ClientTimeout(total=30)
                     ) as resp:
                         if resp.status == 200:
+                            logger.info(f"  [{index:02d}/{total}] ✓ {fname} ({size_kb:.0f}KB)")
                             return True
-                        logger.warning(f"  Server lỗi {resp.status}, retry {attempt+1}")
+                        logger.warning(f"  [{index:02d}/{total}] ✗ {fname} — server {resp.status}, retry {attempt+1}")
 
             except Exception as e:
-                logger.warning(f"  Upload lỗi: {e}, retry {attempt+1}/{self.MAX_RETRIES}")
+                logger.warning(f"  [{index:02d}/{total}] ✗ {fname} — {e}, retry {attempt+1}/{self.MAX_RETRIES}")
 
-            # Sleep ngoài semaphore — không giữ slot
             await asyncio.sleep(self.RETRY_DELAY * (attempt + 1))
 
-        logger.error(f"  FAIL sau {self.MAX_RETRIES} lần: {fpath}")
+        logger.error(f"  [{index:02d}/{total}] FAIL: {fname}")
         return False
 
     async def process_queue(self):
@@ -111,19 +113,22 @@ class TransferEngine:
 
                         logger.info(f"[Upload] {product_id}: {len(files)} ảnh")
 
-                        tasks   = [self.upload_file(session, fp, product_id, category)
-                                   for fp in files]
+                        total = len(files)
+                        tasks = [
+                            self.upload_file(session, fp, product_id, category, i+1, total)
+                            for i, fp in enumerate(files)
+                        ]
                         results = await asyncio.gather(*tasks)
                         success = sum(results)
-                        failed  = len(files) - success
+                        failed  = total - success
 
                         if failed == 0:
-                            logger.info(f"  ✓ {success}/{len(files)} ảnh thành công")
-                            os.remove(job_file)  # chỉ xóa khi tất cả thành công
+                            logger.success(f"  Hoàn thành {product_id}: {success}/{total} ảnh")
+                            os.remove(job_file)
                             await self._notify_server(session, product_id,
                                                       category, job['metadata'])
                         else:
-                            logger.warning(f"  ✗ {failed} ảnh thất bại — giữ job để retry sau")
+                            logger.warning(f"  {failed}/{total} ảnh thất bại — giữ job để retry sau")
 
                     except Exception as e:
                         logger.error(f"Job error: {e}")
@@ -145,12 +150,54 @@ class TransferEngine:
             logger.debug(f"  Notify thất bại (non-critical): {e}")
 
 
+    def scan_and_enqueue(self, save_dir: str, category: str = "san_pham"):
+        """Quét thư mục ảnh đã chụp, tự enqueue tất cả sản phẩm chưa upload."""
+        save_path = Path(save_dir)
+        if not save_path.exists():
+            return 0
+
+        # Lấy danh sách product_id đang có trong queue (tránh enqueue lại)
+        queued = set()
+        for jf in self.queue_dir.glob("*.json"):
+            try:
+                job = json.loads(jf.read_text())
+                queued.add(job.get("product_id", ""))
+            except Exception:
+                pass
+
+        count = 0
+        for product_dir in sorted(save_path.iterdir()):
+            if not product_dir.is_dir():
+                continue
+            product_id = product_dir.name
+            if product_id in queued:
+                logger.info(f"  [Skip] {product_id} — đã có trong queue")
+                continue
+            files = sorted(str(f) for f in product_dir.glob("*.jpg"))
+            if not files:
+                continue
+            self.enqueue(files, product_id, category=category)
+            count += 1
+
+        return count
+
+
 if __name__ == "__main__":
-    import sys
-    engine = TransferEngine()
+    engine   = TransferEngine()
+    save_dir = os.getenv("SAVE_DIR", "/home/haiprotn/Documents/detect_product_ai/data/products")
+    category = os.getenv("CATEGORY", "san_pham")
+
     logger.info(f"[Transfer] Server: {TransferEngine.SERVER_URL}")
     logger.info(f"[Transfer] Queue:  {engine.queue_dir}")
-    logger.info("[Transfer] Đang chờ job... (Ctrl+C để dừng)")
+
+    # Tự quét ảnh đã chụp khi khởi động
+    found = engine.scan_and_enqueue(save_dir, category)
+    if found:
+        logger.info(f"[Transfer] Tìm thấy {found} sản phẩm chưa upload → đã thêm vào queue")
+    else:
+        logger.info(f"[Transfer] Không có sản phẩm mới trong {save_dir}")
+
+    logger.info("[Transfer] Bắt đầu upload... (Ctrl+C để dừng)\n")
     try:
         asyncio.run(engine.process_queue())
     except KeyboardInterrupt:

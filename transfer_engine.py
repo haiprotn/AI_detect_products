@@ -18,7 +18,7 @@ class TransferEngine:
     Jetson tiếp tục chụp trong khi upload chạy nền
     """
 
-    SERVER_URL   = os.getenv("SERVER_URL", "http://192.168.1.100:8888")
+    SERVER_URL   = os.getenv("SERVER_URL", "http://192.168.1.254:8888")
     MAX_RETRIES  = 5
     RETRY_DELAY  = 3            # giây
     MAX_PARALLEL = 4            # Upload song song
@@ -143,3 +143,15 @@ class TransferEngine:
             logger.info(f"  → Server được thông báo: {product_id}")
         except Exception as e:
             logger.debug(f"  Notify thất bại (non-critical): {e}")
+
+
+if __name__ == "__main__":
+    import sys
+    engine = TransferEngine()
+    logger.info(f"[Transfer] Server: {TransferEngine.SERVER_URL}")
+    logger.info(f"[Transfer] Queue:  {engine.queue_dir}")
+    logger.info("[Transfer] Đang chờ job... (Ctrl+C để dừng)")
+    try:
+        asyncio.run(engine.process_queue())
+    except KeyboardInterrupt:
+        logger.info("[Transfer] Dừng.")

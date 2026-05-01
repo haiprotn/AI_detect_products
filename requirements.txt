@@ -1,0 +1,12 @@
+opencv-python
+torch
+torchvision
+numpy
+loguru
+ultralytics
+aiohttp
+aiofiles
+uvicorn[standard]
+fastapi
+python-multipart
+python-dotenv

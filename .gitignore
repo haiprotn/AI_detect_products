@@ -1,0 +1,21 @@
+# Credentials
+.env
+
+# Dữ liệu ảnh
+data/
+*.jpg
+*.png
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.whl
+
+# Editor/temp
+*.save
+nano.*.save
+"python test_auto_capture.py"
+
+# Claude
+.claude/

@@ -118,11 +118,10 @@ class AutoCaptureController:
             interval_ok = (now - self._last_capture_time) > self.MIN_INTERVAL_SEC
 
             if report.passed and interval_ok and not self._is_duplicate(frame):
-                # Crop vật thể
-                if report.object_bbox:
-                    save_frame = self.gate.crop_object(frame, report.object_bbox)
-                else:
-                    save_frame = frame
+                # Xóa nền + crop sản phẩm
+                save_frame = self.gate.remove_background(
+                    frame, report.mask, report.object_bbox
+                )
 
                 fname = f"{product_id}_{phase_idx:02d}_{phase_count:03d}.jpg"
                 fpath = product_dir / fname

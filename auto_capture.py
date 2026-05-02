@@ -3,12 +3,36 @@ import os
 os.environ.setdefault("DISPLAY", ":0")
 import cv2
 import time
-import uuid
+import threading
 import hashlib
 import numpy as np
 from pathlib import Path
 from loguru import logger
 from quality_gate import JetsonQualityGate, QualityReport
+
+
+class RTSPFrameGrabber(threading.Thread):
+    """Thread riêng grab frame liên tục — chỉ giữ frame mới nhất, xóa buffer cũ."""
+    def __init__(self, cap: cv2.VideoCapture):
+        super().__init__(daemon=True)
+        self._cap   = cap
+        self._frame = None
+        self._lock  = threading.Lock()
+        self._stop  = False
+
+    def run(self):
+        while not self._stop:
+            ok, frame = self._cap.read()
+            if ok:
+                with self._lock:
+                    self._frame = frame
+
+    def latest(self):
+        with self._lock:
+            return self._frame.copy() if self._frame is not None else None
+
+    def stop(self):
+        self._stop = True
 
 class AutoCaptureController:
     """
@@ -80,23 +104,26 @@ class AutoCaptureController:
         saved_files = []
         phase_idx    = 0
         phase_count  = 0
-        read_failures = 0
+
+        # Dùng grabber thread để luôn có frame mới nhất, tránh buffer tích lũy
+        grabber = RTSPFrameGrabber(cap)
+        grabber.start()
 
         logger.info(f"[Session] Bắt đầu: {product_id}")
+
+        # Chờ frame đầu tiên
+        while grabber.latest() is None:
+            time.sleep(0.05)
 
         if show_ui:
             cv2.namedWindow('Jetson Capture Station', cv2.WINDOW_NORMAL)
             cv2.resizeWindow('Jetson Capture Station', 1280, 720)
 
         while len(saved_files) < self.TARGET_PER_SESSION:
-            ret, frame = cap.read()
-            if not ret:
-                read_failures += 1
-                if read_failures >= self.MAX_READ_FAILURES:
-                    logger.error("Camera mất kết nối, dừng session")
-                    break
+            frame = grabber.latest()
+            if frame is None:
+                time.sleep(0.01)
                 continue
-            read_failures = 0
 
             frame = cv2.resize(frame, (self.PROCESS_WIDTH, self.PROCESS_HEIGHT),
                                interpolation=cv2.INTER_AREA)
@@ -154,6 +181,7 @@ class AutoCaptureController:
                     else:
                         logger.warning("Đã ở phase cuối, không thể skip thêm")
         
+        grabber.stop()
         cap.release()
         if show_ui:
             cv2.destroyAllWindows()

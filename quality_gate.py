@@ -144,16 +144,31 @@ class JetsonQualityGate:
 
     def crop_object(self, frame: np.ndarray,
                     bbox: Optional[Tuple],
-                    padding: float = 0.15) -> np.ndarray:
-        """Crop vùng sản phẩm theo bbox YOLO + padding."""
+                    padding: float = 0.15,
+                    square: bool = True) -> np.ndarray:
+        """Crop vùng sản phẩm theo bbox YOLO + padding. Output hình vuông nếu square=True."""
         if bbox is None:
             return frame
         h, w = frame.shape[:2]
         cx, cy, bw, bh = bbox
-        pad_x = int(bw * padding)
-        pad_y = int(bh * padding)
-        x1 = max(0, int(cx - bw/2) - pad_x)
-        y1 = max(0, int(cy - bh/2) - pad_y)
-        x2 = min(w, int(cx + bw/2) + pad_x)
-        y2 = min(h, int(cy + bh/2) + pad_y)
-        return frame[y1:y2, x1:x2]
+
+        if square:
+            # Lấy cạnh lớn nhất để tạo hình vuông
+            side  = max(bw, bh)
+            pad   = int(side * padding)
+            half  = side // 2 + pad
+            x1 = max(0, int(cx) - half)
+            y1 = max(0, int(cy) - half)
+            x2 = min(w, int(cx) + half)
+            y2 = min(h, int(cy) + half)
+        else:
+            pad_x = int(bw * padding)
+            pad_y = int(bh * padding)
+            x1 = max(0, int(cx - bw/2) - pad_x)
+            y1 = max(0, int(cy - bh/2) - pad_y)
+            x2 = min(w, int(cx + bw/2) + pad_x)
+            y2 = min(h, int(cy + bh/2) + pad_y)
+
+        cropped = frame[y1:y2, x1:x2]
+        # Resize về 224x224 chuẩn cho DINOv2
+        return cv2.resize(cropped, (224, 224), interpolation=cv2.INTER_AREA)

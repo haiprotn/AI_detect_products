@@ -192,30 +192,36 @@ class AutoCaptureController:
     def _open_rtsp(self, url: str):
         safe_url = self._encode_rtsp_url(url)
 
-        # Thử theo thứ tự: GStreamer HW decode → GStreamer SW decode → auto
+        # Thử theo thứ tự ưu tiên: HW decode Jetson → SW decode → FFmpeg
         pipelines = [
-            # Pipeline 1: NVIDIA hardware decode (Jetson đầy đủ plugin)
+            # Pipeline 1: NVIDIA HW decode — độ trễ thấp nhất trên Jetson
             (
-                f"rtspsrc location={safe_url} latency=100 ! "
-                "rtph264depay ! h264parse ! nvv4l2decoder ! "
+                f"rtspsrc location={safe_url} latency=0 buffer-mode=0 ! "
+                "rtph264depay ! h264parse ! nvv4l2decoder enable-max-performance=1 ! "
                 "nvvidconv ! video/x-raw,format=BGRx ! "
-                "videoconvert ! video/x-raw,format=BGR ! appsink drop=1",
+                "videoconvert ! video/x-raw,format=BGR ! "
+                "appsink max-buffers=1 drop=true sync=false",
                 cv2.CAP_GSTREAMER
             ),
-            # Pipeline 2: GStreamer software decode (không cần NVIDIA plugin)
+            # Pipeline 2: GStreamer SW decode
             (
-                f"rtspsrc location={safe_url} latency=100 ! "
+                f"rtspsrc location={safe_url} latency=0 ! "
                 "decodebin ! videoconvert ! "
-                "video/x-raw,format=BGR ! appsink drop=1",
+                "video/x-raw,format=BGR ! "
+                "appsink max-buffers=1 drop=true sync=false",
                 cv2.CAP_GSTREAMER
             ),
-            # Pipeline 3: để OpenCV tự chọn backend
+            # Pipeline 3: FFmpeg (CAP_FFMPEG) — ổn định nhất khi GStreamer lỗi
+            (safe_url, cv2.CAP_FFMPEG),
+            # Pipeline 4: để OpenCV tự chọn
             (safe_url, cv2.CAP_ANY),
         ]
 
         for source, backend in pipelines:
             cap = cv2.VideoCapture(source, backend)
             if cap.isOpened():
+                # Giảm buffer để lấy frame mới nhất, giảm độ trễ
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 logger.info(f"[Camera] RTSP kết nối thành công: {url}")
                 return cap
             cap.release()

@@ -12,6 +12,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+import warnings
+warnings.filterwarnings("ignore", message="xFormers is not available")
+
 import numpy as np
 import torch
 from loguru import logger

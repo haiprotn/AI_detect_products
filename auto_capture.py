@@ -166,8 +166,6 @@ class AutoCaptureController:
                 if key == ord('q'):
                     logger.warning("Session bị hủy")
                     break
-                    else:
-                        logger.warning("Đã ở phase cuối, không thể skip thêm")
         
         grabber.stop()
         cap.release()

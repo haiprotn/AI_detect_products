@@ -30,6 +30,9 @@ class JetsonQualityGate:
     MOTION_MAX     = 25.0
     BG_COLOR       = 255   # màu nền sau khi xóa (255=trắng, 0=đen)
 
+    # Class COCO cần loại bỏ — không phải sản phẩm
+    EXCLUDE_CLASSES = {0}  # 0=person (tay, người cầm sản phẩm)
+
     def __init__(self):
         self._prev_gray = None
         self._load_detector()
@@ -94,19 +97,27 @@ class JetsonQualityGate:
                                     conf=self.OBJECT_CONF)
             boxes = results[0].boxes
 
-            if len(boxes) == 0:
+            # Lọc bỏ class không phải sản phẩm (tay, người...)
+            valid_indices = [
+                i for i, cls in enumerate(boxes.cls.cpu().numpy().astype(int))
+                if cls not in self.EXCLUDE_CLASSES
+            ]
+
+            if not valid_indices:
                 return QualityReport(
                     passed=False, blur_score=blur_score,
                     brightness=brightness, has_object=False,
                     object_bbox=None, mask=None,
-                    reject_reason="Không thấy sản phẩm"
+                    reject_reason="Không thấy sản phẩm (chỉ thấy tay/người)"
                 )
 
-            # Lấy object lớn nhất
-            xywh    = boxes.xywh.cpu().numpy()
-            best_i  = np.argmax(xywh[:, 2] * xywh[:, 3])
-            largest = xywh[best_i]
-            bbox    = tuple(largest.astype(int))
+            # Lấy object lớn nhất trong các object hợp lệ
+            xywh       = boxes.xywh.cpu().numpy()
+            valid_xywh = xywh[valid_indices]
+            best_local = int(np.argmax(valid_xywh[:, 2] * valid_xywh[:, 3]))
+            best_i     = valid_indices[best_local]
+            largest    = xywh[best_i]
+            bbox       = tuple(largest.astype(int))
 
             # Lấy segmentation mask tương ứng
             if self.use_seg and results[0].masks is not None:

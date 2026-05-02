@@ -12,7 +12,9 @@ from quality_gate import JetsonQualityGate
 from auto_capture import AutoCaptureController
 from transfer_engine import TransferEngine
 
-CAM_SOURCE = int(os.getenv("CAM_INDEX", 0))
+# Ưu tiên RTSP_URL, nếu không có thì dùng USB CAM_INDEX
+_rtsp = os.getenv("RTSP_URL", "").strip()
+CAM_SOURCE = _rtsp if _rtsp else int(os.getenv("CAM_INDEX", 0))
 SAVE_DIR   = os.getenv("SAVE_DIR", "/home/haiprotn/Documents/detect_product_ai/data/products")
 SHOW_UI    = True
 CATEGORY   = os.getenv("CATEGORY", "san_pham")  # nhóm sản phẩm trên server
@@ -26,7 +28,8 @@ def main():
     print("  Hệ thống chụp ảnh sản phẩm — Sẵn sàng")
     print("=" * 45)
     print(f"  Lưu ảnh vào: {SAVE_DIR}")
-    print(f"  Camera:      USB index={CAM_SOURCE}")
+    cam_info = f"RTSP: {CAM_SOURCE}" if isinstance(CAM_SOURCE, str) else f"USB index={CAM_SOURCE}"
+    print(f"  Camera:      {cam_info}")
     print(f"  Server:      {TransferEngine.SERVER_URL}")
     print("  Gõ 'q' để thoát")
     print("=" * 45)

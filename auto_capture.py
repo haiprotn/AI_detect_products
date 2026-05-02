@@ -128,6 +128,11 @@ class AutoCaptureController:
             frame = cv2.resize(frame, (self.PROCESS_WIDTH, self.PROCESS_HEIGHT),
                                interpolation=cv2.INTER_AREA)
 
+            # Che vùng OSD camera (timestamp góc trên, logo góc dưới)
+            h_f, w_f = frame.shape[:2]
+            frame[:int(h_f * 0.08), :int(w_f * 0.35)] = 128   # góc trên trái
+            frame[int(h_f * 0.92):, int(w_f * 0.65):]  = 128   # góc dưới phải
+
             current_phase = self.PHASES[min(phase_idx, len(self.PHASES)-1)]
 
             # Kiểm tra chất lượng
@@ -147,7 +152,7 @@ class AutoCaptureController:
             if report.passed and interval_ok and not self._is_duplicate(frame):
                 # Xóa nền + crop sản phẩm
                 save_frame = self.gate.remove_background(
-                    frame, report.mask, report.object_bbox
+                    frame, report.mask, report.object_bbox, padding=0.05
                 )
 
                 fname = f"{product_id}_{phase_idx:02d}_{phase_count:03d}.jpg"

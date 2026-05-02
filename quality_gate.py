@@ -125,15 +125,15 @@ class JetsonQualityGate:
                                   interpolation=cv2.INTER_NEAREST)
                 mask = (mask > 0.5).astype(np.uint8)
 
-            # Center check
+            # Center check — nới rộng để dễ chụp hơn
             cx, cy = bbox[0], bbox[1]
-            if (abs(cx - w/2) / (w/2) > 0.40 or
-                    abs(cy - h/2) / (h/2) > 0.40):
+            if (abs(cx - w/2) / (w/2) > 0.70 or
+                    abs(cy - h/2) / (h/2) > 0.70):
                 return QualityReport(
                     passed=False, blur_score=blur_score,
                     brightness=brightness, has_object=True,
                     object_bbox=bbox, mask=None,
-                    reject_reason="Sản phẩm lệch khỏi trung tâm"
+                    reject_reason="Sản phẩm quá lệch (ra sát mép)"
                 )
 
         return QualityReport(

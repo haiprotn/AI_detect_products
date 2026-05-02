@@ -136,6 +136,24 @@ class JetsonQualityGate:
                     reject_reason="Sản phẩm quá lệch (ra sát mép)"
                 )
 
+            # ── Blur check lại trên vùng sản phẩm (quan trọng hơn blur toàn frame)
+            cx2, cy2, bw2, bh2 = bbox
+            pad = int(max(bw2, bh2) * 0.15)
+            rx1 = max(0, int(cx2 - bw2/2) - pad)
+            ry1 = max(0, int(cy2 - bh2/2) - pad)
+            rx2 = min(w, int(cx2 + bw2/2) + pad)
+            ry2 = min(h, int(cy2 + bh2/2) + pad)
+            roi = gray[ry1:ry2, rx1:rx2]
+            if roi.size > 0:
+                blur_score = cv2.Laplacian(roi, cv2.CV_64F).var()
+                if blur_score < self.BLUR_MIN:
+                    return QualityReport(
+                        passed=False, blur_score=blur_score,
+                        brightness=brightness, has_object=True,
+                        object_bbox=bbox, mask=None,
+                        reject_reason=f"Sản phẩm mờ ({blur_score:.0f} < {self.BLUR_MIN})"
+                    )
+
         return QualityReport(
             passed=True, blur_score=blur_score, brightness=brightness,
             has_object=True, object_bbox=bbox, mask=mask,

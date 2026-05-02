@@ -30,8 +30,8 @@ class JetsonQualityGate:
     MOTION_MAX     = 25.0
     BG_COLOR       = 255
 
-    # Class COCO cần loại bỏ — không phải sản phẩm
-    EXCLUDE_CLASSES = {0}  # 0=person (tay, người cầm sản phẩm)
+    # Loại object quá lớn (thân người, nền) — chiếm > 50% diện tích frame
+    MAX_OBJECT_AREA_RATIO = 0.50
 
     def __init__(self):
         self._prev_gray = None
@@ -96,10 +96,11 @@ class JetsonQualityGate:
                                     conf=self.OBJECT_CONF)
             boxes = results[0].boxes
 
-            # Lọc bỏ class không phải sản phẩm (tay, người...)
+            # Lọc bỏ object quá lớn (thân người, nền) — giữ lại tay cầm bút
+            frame_area = w * h
             valid_indices = [
-                i for i, cls in enumerate(boxes.cls.cpu().numpy().astype(int))
-                if cls not in self.EXCLUDE_CLASSES
+                i for i, box in enumerate(boxes.xywh.cpu().numpy())
+                if (box[2] * box[3]) / frame_area < self.MAX_OBJECT_AREA_RATIO
             ]
 
             if not valid_indices:
@@ -107,7 +108,7 @@ class JetsonQualityGate:
                     passed=False, blur_score=blur_score,
                     brightness=brightness, has_object=False,
                     object_bbox=None, mask=None,
-                    reject_reason="Không thấy sản phẩm (chỉ thấy tay/người)"
+                    reject_reason="Không thấy sản phẩm"
                 )
 
             # Lấy object lớn nhất trong các object hợp lệ

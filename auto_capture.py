@@ -271,34 +271,32 @@ class AutoCaptureController:
         cv2.rectangle(display, (bar_x, h - 40), (bar_x + bar_w, h - 15), (50, 50, 50), -1)
         cv2.rectangle(display, (bar_x, h - 40), (bar_x + prog_w, h - 15), (0, 200, 0), -1)
         
-        # Khung vuông hướng dẫn đặt sản phẩm (cố định ở giữa màn hình)
-        sq    = int(min(w, h) * 0.55)   # cạnh khung vuông = 55% cạnh nhỏ hơn
-        cx_s  = w // 2
-        cy_s  = h // 2
-        x1_s  = cx_s - sq // 2
-        y1_s  = cy_s - sq // 2
-        x2_s  = cx_s + sq // 2
-        y2_s  = cy_s + sq // 2
+        # Khung vuông cố định — đúng vùng sẽ được crop và lưu
+        sq     = int(min(w, h) * 0.55)
+        cx_s   = w // 2
+        cy_s   = h // 2
+        x1_s   = cx_s - sq // 2
+        y1_s   = cy_s - sq // 2
+        x2_s   = cx_s + sq // 2
+        y2_s   = cy_s + sq // 2
+        gc     = (0, 255, 0) if report.passed else (0, 100, 255)
 
-        guide_color = (0, 255, 0) if report.passed else (0, 100, 255)
-        cv2.rectangle(display, (x1_s, y1_s), (x2_s, y2_s), guide_color, 2)
-        # Vẽ 4 góc nổi bật hơn
+        # Làm mờ vùng ngoài khung để tập trung nhìn vào sản phẩm
+        mask = np.zeros((h, w), dtype=np.uint8)
+        mask[y1_s:y2_s, x1_s:x2_s] = 255
+        blurred = cv2.GaussianBlur(display, (21, 21), 0)
+        display = np.where(mask[:, :, None] == 255, display, blurred)
+
+        cv2.rectangle(display, (x1_s, y1_s), (x2_s, y2_s), gc, 2)
         corner = sq // 8
         for px, py in [(x1_s, y1_s), (x2_s, y1_s),
                        (x1_s, y2_s), (x2_s, y2_s)]:
             dx = corner if px == x1_s else -corner
             dy = corner if py == y1_s else -corner
-            cv2.line(display, (px, py), (px + dx, py), guide_color, 4)
-            cv2.line(display, (px, py), (px, py + dy), guide_color, 4)
+            cv2.line(display, (px, py), (px + dx, py), gc, 4)
+            cv2.line(display, (px, py), (px, py + dy), gc, 4)
 
-        # Bbox YOLO detect được
-        if report.object_bbox:
-            cx, cy, bw, bh = report.object_bbox
-            side = max(bw, bh)
-            half = side // 2
-            cv2.rectangle(display,
-                          (int(cx)-half, int(cy)-half),
-                          (int(cx)+half, int(cy)+half),
-                          (255, 200, 0), 1)
-
+        cv2.putText(display, "Dat san pham vao khung",
+                    (x1_s, y1_s - 10), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6, gc, 2)
         return display

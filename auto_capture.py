@@ -155,10 +155,24 @@ class AutoCaptureController:
             interval_ok = (now - self._last_capture_time) > self.MIN_INTERVAL_SEC
 
             if report.passed and interval_ok and not self._is_duplicate(frame):
-                # Xóa nền + crop sản phẩm
+                # Thu thêm frame trong 0.4s, lấy frame nét nhất
+                best_frame      = frame
+                best_blur       = report.blur_score
+                deadline        = time.time() + 0.4
+                while time.time() < deadline:
+                    cand = grabber.latest()
+                    if cand is not None:
+                        gray  = cv2.cvtColor(cand, cv2.COLOR_BGR2GRAY)
+                        score = cv2.Laplacian(gray, cv2.CV_64F).var()
+                        if score > best_blur:
+                            best_blur  = score
+                            best_frame = cand
+                    time.sleep(0.02)
+
                 save_frame = self.gate.crop_object(
-                    frame, report.object_bbox, padding=0.15
+                    best_frame, report.object_bbox, padding=0.15
                 )
+                logger.debug(f"  Blur best: {best_blur:.0f}")
 
                 fname = f"{product_id}_{phase_idx:02d}_{phase_count:03d}.jpg"
                 fpath = product_dir / fname

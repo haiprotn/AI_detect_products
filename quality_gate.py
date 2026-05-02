@@ -23,12 +23,12 @@ class JetsonQualityGate:
     Dùng YOLOv8n-seg để vừa detect vừa lấy mask sản phẩm.
     """
 
-    BLUR_MIN       = 60.0
+    BLUR_MIN       = 120.0  # tăng lên để loại ảnh mờ tốt hơn
     BRIGHTNESS_MIN = 50
     BRIGHTNESS_MAX = 220
     OBJECT_CONF    = 0.40
     MOTION_MAX     = 25.0
-    BG_COLOR       = 255   # màu nền sau khi xóa (255=trắng, 0=đen)
+    BG_COLOR       = 255
 
     # Class COCO cần loại bỏ — không phải sản phẩm
     EXCLUDE_CLASSES = {0}  # 0=person (tay, người cầm sản phẩm)

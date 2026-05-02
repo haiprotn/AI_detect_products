@@ -1,20 +1,17 @@
-# ── Jetson + Server chung ──────────────────────────
+# Jetson + Server
 torch
 torchvision
-numpy
-loguru
-ultralytics          # YOLOv8n-seg (Jetson) + YOLOv8n (Server)
+numpy<2.0
 opencv-python
-python-dotenv
 Pillow
+loguru
+python-dotenv
 
-# ── Jetson only ────────────────────────────────────
+# Jetson only
 aiohttp
 aiofiles
 
-# ── Server only ────────────────────────────────────
+# Server only
 fastapi
 uvicorn[standard]
 python-multipart
-faiss-cpu            # thay bằng faiss-gpu nếu có CUDA
-timm

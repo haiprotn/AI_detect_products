@@ -22,10 +22,15 @@ class RTSPFrameGrabber(threading.Thread):
 
     def run(self):
         while not self._stop:
-            ok, frame = self._cap.read()
-            if ok:
-                with self._lock:
-                    self._frame = frame
+            try:
+                ok, frame = self._cap.read()
+                if ok:
+                    with self._lock:
+                        self._frame = frame
+                else:
+                    time.sleep(0.01)
+            except Exception:
+                time.sleep(0.05)
 
     def latest(self):
         with self._lock:
@@ -225,11 +230,18 @@ class AutoCaptureController:
     def _open_rtsp(self, url: str):
         safe_url = self._encode_rtsp_url(url)
 
-        # Thử theo thứ tự ưu tiên: HW decode Jetson → SW decode → FFmpeg
+        # Force TCP + tắt async decode để tránh xung đột với Python thread
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+            "rtsp_transport;tcp|"
+            "fflags;nobuffer|"
+            "flags;low_delay|"
+            "threads;1"
+        )
+
         pipelines = [
-            # Pipeline 1: NVIDIA HW decode — độ trễ thấp nhất trên Jetson
+            # Pipeline 1: NVIDIA HW decode Jetson
             (
-                f"rtspsrc location={safe_url} latency=0 buffer-mode=0 ! "
+                f"rtspsrc location={safe_url} latency=0 protocols=tcp ! "
                 "rtph264depay ! h264parse ! nvv4l2decoder enable-max-performance=1 ! "
                 "nvvidconv ! video/x-raw,format=BGRx ! "
                 "videoconvert ! video/x-raw,format=BGR ! "
@@ -238,22 +250,19 @@ class AutoCaptureController:
             ),
             # Pipeline 2: GStreamer SW decode
             (
-                f"rtspsrc location={safe_url} latency=0 ! "
+                f"rtspsrc location={safe_url} latency=0 protocols=tcp ! "
                 "decodebin ! videoconvert ! "
                 "video/x-raw,format=BGR ! "
                 "appsink max-buffers=1 drop=true sync=false",
                 cv2.CAP_GSTREAMER
             ),
-            # Pipeline 3: FFmpeg (CAP_FFMPEG) — ổn định nhất khi GStreamer lỗi
+            # Pipeline 3: FFmpeg single-thread
             (safe_url, cv2.CAP_FFMPEG),
-            # Pipeline 4: để OpenCV tự chọn
-            (safe_url, cv2.CAP_ANY),
         ]
 
         for source, backend in pipelines:
             cap = cv2.VideoCapture(source, backend)
             if cap.isOpened():
-                # Giảm buffer để lấy frame mới nhất, giảm độ trễ
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 logger.info(f"[Camera] RTSP kết nối thành công: {url}")
                 return cap

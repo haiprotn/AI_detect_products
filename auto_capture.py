@@ -156,8 +156,8 @@ class AutoCaptureController:
 
             if report.passed and interval_ok and not self._is_duplicate(frame):
                 # Xóa nền + crop sản phẩm
-                save_frame = self.gate.remove_background(
-                    frame, report.mask, report.object_bbox, padding=0.05
+                save_frame = self.gate.crop_object(
+                    frame, report.object_bbox, padding=0.15
                 )
 
                 fname = f"{product_id}_{phase_idx:02d}_{phase_count:03d}.jpg"

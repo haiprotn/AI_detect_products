@@ -41,13 +41,12 @@ class JetsonQualityGate:
     def _load_detector(self):
         try:
             from ultralytics import YOLO
-            # Dùng seg model để vừa detect vừa lấy mask
-            self.detector    = YOLO("yolov8n-seg.pt")
-            self.use_seg     = True
+            self.detector     = YOLO("yolov8n.pt")   # detect only, nhẹ hơn seg
+            self.use_seg      = False
             self.use_detector = True
-            print("[QualityGate] YOLOv8n-seg loaded — background removal enabled")
+            print("[QualityGate] YOLOv8n loaded")
         except Exception as e:
-            print(f"[QualityGate] WARN: {e} — bỏ qua detect/seg")
+            print(f"[QualityGate] WARN: {e} — bỏ qua detect")
             self.use_detector = False
             self.use_seg      = False
 
@@ -143,33 +142,18 @@ class JetsonQualityGate:
             reject_reason=""
         )
 
-    def remove_background(self, frame: np.ndarray,
-                          mask: Optional[np.ndarray],
-                          bbox: Optional[Tuple],
-                          padding: float = 0.20) -> np.ndarray:
-        """
-        Xóa nền và crop vùng sản phẩm.
-        - Nếu có mask (seg): áp dụng mask → nền trắng → crop bbox
-        - Nếu chỉ có bbox: crop bbox thôi
-        - Không có gì: trả về frame gốc
-        """
+    def crop_object(self, frame: np.ndarray,
+                    bbox: Optional[Tuple],
+                    padding: float = 0.15) -> np.ndarray:
+        """Crop vùng sản phẩm theo bbox YOLO + padding."""
+        if bbox is None:
+            return frame
         h, w = frame.shape[:2]
-
-        if mask is not None:
-            # Nền trắng, giữ nguyên vùng sản phẩm
-            bg     = np.full_like(frame, self.BG_COLOR)
-            result = np.where(mask[:, :, None] == 1, frame, bg)
-        else:
-            result = frame
-
-        if bbox is not None:
-            cx, cy, bw, bh = bbox
-            pad_x = int(bw * padding)
-            pad_y = int(bh * padding)
-            x1 = max(0, int(cx - bw/2) - pad_x)
-            y1 = max(0, int(cy - bh/2) - pad_y)
-            x2 = min(w, int(cx + bw/2) + pad_x)
-            y2 = min(h, int(cy + bh/2) + pad_y)
-            result = result[y1:y2, x1:x2]
-
-        return result
+        cx, cy, bw, bh = bbox
+        pad_x = int(bw * padding)
+        pad_y = int(bh * padding)
+        x1 = max(0, int(cx - bw/2) - pad_x)
+        y1 = max(0, int(cy - bh/2) - pad_y)
+        x2 = min(w, int(cx + bw/2) + pad_x)
+        y2 = min(h, int(cy + bh/2) + pad_y)
+        return frame[y1:y2, x1:x2]

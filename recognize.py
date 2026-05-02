@@ -20,7 +20,7 @@ warnings.filterwarnings("ignore")
 
 VECTOR_DIR  = Path(os.getenv("VECTOR_DIR", "./vector_store"))
 CAM_SOURCE  = os.getenv("RTSP_URL") or int(os.getenv("CAM_INDEX", 0))
-MODEL_NAME  = "dinov2_vits14"
+MODEL_NAME  = "dinov2_vitb14"   # base model — 768 dim
 DEVICE      = "cuda" if torch.cuda.is_available() else "cpu"
 INTERVAL    = 1.0
 CROP_RATIO  = 0.60

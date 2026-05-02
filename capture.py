@@ -1,11 +1,10 @@
 """
-capture.py — Chạy trên Jetson
-Chụp ảnh sản phẩm: đặt sản phẩm vào khung vuông, hệ thống tự chụp 50 ảnh.
+capture.py — Jetson Edge
+Pipeline: Camera → YOLOv8 detect → crop → blur check → lưu ảnh → upload
 """
 import os
 import time
 import threading
-import hashlib
 from pathlib import Path
 
 import cv2
@@ -15,19 +14,87 @@ from loguru import logger
 
 load_dotenv()
 
-SAVE_DIR    = Path(os.getenv("SAVE_DIR", "/home/user/data/products"))
-CAM_SOURCE  = os.getenv("RTSP_URL") or int(os.getenv("CAM_INDEX", 0))
-CATEGORY    = os.getenv("CATEGORY", "san_pham")
-TARGET      = 50       # số ảnh cần chụp
-BLUR_MIN    = 80.0     # ngưỡng nét tối thiểu
-INTERVAL    = 0.5      # giây tối thiểu giữa 2 lần chụp
-CROP_RATIO  = 0.60     # khung vuông chiếm 60% cạnh nhỏ của frame
-IMG_SIZE    = 224      # kích thước ảnh lưu (chuẩn DINOv2)
-DISPLAY_W   = 960
-DISPLAY_H   = 540
+SAVE_DIR   = Path(os.getenv("SAVE_DIR", "/home/user/data/products"))
+CAM_SOURCE = os.getenv("RTSP_URL") or int(os.getenv("CAM_INDEX", 0))
+CATEGORY   = os.getenv("CATEGORY", "san_pham")
+TARGET     = 50
+BLUR_MIN   = 80.0
+INTERVAL   = 0.5
+CROP_RATIO = 0.60    # fallback nếu YOLO không detect được
+IMG_SIZE   = 224
+DISPLAY_W  = 960
+DISPLAY_H  = 540
+
+# Lọc object quá lớn (nền, thân người) — chiếm > 45% diện tích frame
+MAX_OBJ_RATIO = 0.45
+# Lọc class COCO: 0=person, 67=cell phone ... (giữ lại hầu hết vật thể nhỏ)
+EXCLUDE_CLS   = set()   # để trống = không lọc theo class, chỉ lọc theo size
 
 
-# ── Frame Grabber Thread ──────────────────────────────────────────────────────
+# ── YOLO ─────────────────────────────────────────────────────────────────────
+
+_yolo = None
+
+def get_yolo():
+    global _yolo
+    if _yolo is None:
+        from ultralytics import YOLO
+        _yolo = YOLO("yolov8n.pt")
+        logger.info("YOLOv8n loaded")
+    return _yolo
+
+
+def detect_product(frame: np.ndarray):
+    """
+    Trả về (x1,y1,x2,y2) bbox sản phẩm hoặc None.
+    Ưu tiên object nhỏ nhất (sản phẩm), loại object quá lớn (nền/người).
+    """
+    h, w = frame.shape[:2]
+    frame_area = h * w
+    try:
+        results = get_yolo()(frame, verbose=False, conf=0.25)
+        boxes   = results[0].boxes
+        if len(boxes) == 0:
+            return None
+
+        valid = []
+        for i, box in enumerate(boxes.xywh.cpu().numpy()):
+            cx, cy, bw, bh = box
+            cls = int(boxes.cls[i].item())
+            area_ratio = (bw * bh) / frame_area
+            if area_ratio > MAX_OBJ_RATIO:
+                continue
+            if cls in EXCLUDE_CLS:
+                continue
+            valid.append((area_ratio, cx, cy, bw, bh))
+
+        if not valid:
+            return None
+
+        # Lấy object nhỏ nhất (sản phẩm, không phải nền)
+        valid.sort(key=lambda x: x[0])
+        _, cx, cy, bw, bh = valid[0]
+
+        pad = int(max(bw, bh) * 0.15)
+        x1  = max(0, int(cx - bw/2) - pad)
+        y1  = max(0, int(cy - bh/2) - pad)
+        x2  = min(w, int(cx + bw/2) + pad)
+        y2  = min(h, int(cy + bh/2) + pad)
+        return x1, y1, x2, y2
+
+    except Exception as e:
+        logger.warning(f"YOLO error: {e}")
+        return None
+
+
+def fallback_crop(h: int, w: int):
+    """Crop trung tâm khi YOLO không detect được."""
+    side = int(min(h, w) * CROP_RATIO)
+    cx, cy = w//2, h//2
+    return cx-side//2, cy-side//2, cx+side//2, cy+side//2
+
+
+# ── Frame Grabber ─────────────────────────────────────────────────────────────
 
 class FrameGrabber(threading.Thread):
     def __init__(self, source):
@@ -41,17 +108,17 @@ class FrameGrabber(threading.Thread):
         cap = self._open()
         while not self._stop:
             try:
-                ok, frame = cap.read()
+                ok, f = cap.read()
                 if ok:
                     with self._lock:
-                        self.frame = frame
+                        self.frame = f
                 else:
                     time.sleep(0.05)
             except Exception:
                 time.sleep(0.1)
         cap.release()
 
-    def _open(self) -> cv2.VideoCapture:
+    def _open(self):
         if isinstance(self.source, str):
             os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
                 "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|threads;1"
@@ -72,13 +139,6 @@ class FrameGrabber(threading.Thread):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def crop_box(h: int, w: int):
-    """Tọa độ khung vuông trung tâm."""
-    side = int(min(h, w) * CROP_RATIO)
-    cx, cy = w // 2, h // 2
-    return cx - side//2, cy - side//2, cx + side//2, cy + side//2
-
-
 def blur_score(roi_gray: np.ndarray) -> float:
     return float(cv2.Laplacian(roi_gray, cv2.CV_64F).var())
 
@@ -88,34 +148,34 @@ def phash(gray: np.ndarray) -> np.ndarray:
     return small.flatten() > small.mean()
 
 
-def draw(frame, passed, blur, saved, reason=""):
+def draw(frame, bbox, passed, blur, saved, reason=""):
     h, w = frame.shape[:2]
-    x1, y1, x2, y2 = crop_box(h, w)
+    x1, y1, x2, y2 = bbox
 
-    # Làm mờ ngoài khung
     blur_bg = cv2.GaussianBlur(frame, (31, 31), 0)
     mask    = np.zeros((h, w), np.uint8)
     mask[y1:y2, x1:x2] = 255
-    out = np.where(mask[:, :, None] == 255, frame, blur_bg)
+    out = np.where(mask[:,:,None] == 255, frame, blur_bg)
 
-    # Khung vuông
     color = (0, 220, 0) if passed else (0, 80, 255)
-    cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
-    c = (x2-x1) // 8
+    cv2.rectangle(out, (x1,y1), (x2,y2), color, 2)
+    c = (x2-x1)//8
     for px, py in [(x1,y1),(x2,y1),(x1,y2),(x2,y2)]:
         dx = c if px==x1 else -c
         dy = c if py==y1 else -c
         cv2.line(out, (px,py), (px+dx,py), color, 4)
         cv2.line(out, (px,py), (px,py+dy), color, 4)
 
-    # Header
+    tag = "YOLO" if bbox != fallback_crop(h, w) else "CENTER"
+    cv2.putText(out, tag, (x1+4, y1-6),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,200,0), 1)
+
     cv2.rectangle(out, (0,0), (w,52), (0,0,0), -1)
     status = f"OK  blur={blur:.0f}" if passed else (reason or "Chua san sang")
     cv2.putText(out, status, (12,34), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
     cv2.putText(out, f"{saved}/{TARGET}", (w-160,34),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255,255,255), 2)
 
-    # Thanh tiến trình
     bx, bw_ = int(w*0.1), int(w*0.8)
     cv2.rectangle(out, (bx,h-35), (bx+bw_,h-12), (50,50,50), -1)
     cv2.rectangle(out, (bx,h-35), (bx+int(bw_*saved/TARGET),h-12), (0,200,0), -1)
@@ -131,19 +191,17 @@ def run_session(product_id: str) -> list:
 
     grabber = FrameGrabber(CAM_SOURCE)
     grabber.start()
-    logger.info(f"Kết nối camera...")
-
+    logger.info("Kết nối camera...")
     while grabber.latest() is None:
         time.sleep(0.05)
 
     cv2.namedWindow("Capture", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Capture", DISPLAY_W, DISPLAY_H)
 
-    saved      = []
-    last_hash  = None
-    last_time  = 0.0
-
-    logger.info(f"[{product_id}] Bắt đầu — đặt sản phẩm vào khung")
+    saved     = []
+    last_hash = None
+    last_time = 0.0
+    logger.info(f"[{product_id}] Bắt đầu — đưa sản phẩm vào khung")
 
     while len(saved) < TARGET:
         frame = grabber.latest()
@@ -151,25 +209,28 @@ def run_session(product_id: str) -> list:
             time.sleep(0.01)
             continue
 
-        h, w   = frame.shape[:2]
-        x1,y1,x2,y2 = crop_box(h, w)
-        roi    = frame[y1:y2, x1:x2]
-        gray   = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        b      = blur_score(gray)
-        bright = float(gray.mean())
+        h, w = frame.shape[:2]
 
-        passed = False
-        reason = ""
-        if b < BLUR_MIN:
-            reason = f"Mo ({b:.0f}) — giu yen tay"
-        elif bright < 30:
-            reason = "Qua toi"
-        elif bright > 240:
-            reason = "Qua sang"
-        else:
-            passed = True
+        # YOLO detect → crop, fallback center crop nếu không detect
+        det  = detect_product(frame)
+        bbox = det if det else fallback_crop(h, w)
+        x1, y1, x2, y2 = bbox
+        roi  = frame[y1:y2, x1:x2]
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        b    = blur_score(gray)
+        br   = float(gray.mean())
 
-        cv2.imshow("Capture", draw(frame, passed, b, len(saved), reason))
+        passed, reason = True, ""
+        if det is None:
+            passed, reason = False, "Khong thay san pham — dua vao khung"
+        elif b < BLUR_MIN:
+            passed, reason = False, f"Mo ({b:.0f}) — giu yen"
+        elif br < 30:
+            passed, reason = False, "Qua toi"
+        elif br > 240:
+            passed, reason = False, "Qua sang"
+
+        cv2.imshow("Capture", draw(frame, bbox, passed, b, len(saved), reason))
 
         now = time.time()
         if passed and (now - last_time) >= INTERVAL:
@@ -200,8 +261,7 @@ def run_session(product_id: str) -> list:
                 last_time = now
                 logger.info(f"  [{len(saved):02d}/{TARGET}] {fname}  blur={best_b:.0f}")
 
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
+        if cv2.waitKey(1) & 0xFF == ord('q'):
             logger.warning("Hủy session")
             break
 
@@ -211,12 +271,10 @@ def run_session(product_id: str) -> list:
     return saved
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
     print("=" * 50)
-    print("  Hệ thống chụp ảnh sản phẩm")
+    print("  Jetson Capture — YOLOv8 + DINOv2-base")
     print(f"  Camera : {CAM_SOURCE}")
     print(f"  Lưu vào: {SAVE_DIR / CATEGORY}")
     print("  Q = thoát session")
@@ -229,4 +287,9 @@ if __name__ == "__main__":
             break
         if pid.lower() == "q" or not pid:
             break
-        run_session(pid)
+        files = run_session(pid)
+        if files:
+            from uploader import enqueue
+            enqueue(files, pid, CATEGORY)
+            print(f"→ Đã thêm vào hàng đợi upload ({len(files)} ảnh)")
+            print("  Chạy: python uploader.py để upload lên server")

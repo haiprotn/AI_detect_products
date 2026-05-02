@@ -17,7 +17,7 @@ from loguru import logger
 
 warnings.filterwarnings("ignore")
 
-MODEL_NAME = "dinov2_vits14"
+MODEL_NAME = "dinov2_vitb14"   # base model — 768 dim, chính xác hơn vits14
 EMBED_DIM  = 768
 DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"
 
